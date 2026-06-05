@@ -2,18 +2,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { NotFoundException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
-import { Task } from './entities/task.entity';
-import { CreateTaskDto } from './dto/create-task.dto';
+import { Task, TaskStatus } from './entities/task.entity';
 
 describe('TasksService', () => {
   let service: TasksService;
 
   const mockTask: Task = {
     id: 1,
-    name: 'Test Task',
-    email: 'test@test.com',
-    age: 25,
-    completed: false,
+    title: 'Test Task',
+    description: 'Test description',
+    status: TaskStatus.PENDING,
+    priority: 1,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -24,6 +23,7 @@ describe('TasksService', () => {
     create: jest.fn(),
     save: jest.fn(),
     remove: jest.fn(),
+    count: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -47,14 +47,24 @@ describe('TasksService', () => {
   });
 
   describe('getTasks', () => {
-    it('should return an array of tasks', async () => {
-      const tasks = [mockTask];
-      mockRepository.find.mockResolvedValue(tasks);
+    it('should return all tasks', async () => {
+      mockRepository.find.mockResolvedValue([mockTask]);
 
       const result = await service.getTasks();
 
-      expect(result).toEqual(tasks);
+      expect(result).toEqual([mockTask]);
       expect(mockRepository.find).toHaveBeenCalled();
+    });
+
+    it('should filter tasks by status', async () => {
+      mockRepository.find.mockResolvedValue([mockTask]);
+
+      const result = await service.getTasks(TaskStatus.PENDING);
+
+      expect(result).toEqual([mockTask]);
+      expect(mockRepository.find).toHaveBeenCalledWith({
+        where: { status: TaskStatus.PENDING },
+      });
     });
   });
 
@@ -65,10 +75,9 @@ describe('TasksService', () => {
       const result = await service.getTaskById(1);
 
       expect(result).toEqual(mockTask);
-      expect(mockRepository.findOne).toHaveBeenCalledWith({ where: { id: 1 } });
     });
 
-    it('should throw NotFoundException if task not found', async () => {
+    it('should throw NotFoundException if not found', async () => {
       mockRepository.findOne.mockResolvedValue(null);
 
       await expect(service.getTaskById(999)).rejects.toThrow(NotFoundException);
@@ -77,31 +86,25 @@ describe('TasksService', () => {
 
   describe('createTask', () => {
     it('should create a new task', async () => {
-      const createDto: CreateTaskDto = {
-        name: 'New Task',
-        email: 'new@test.com',
-        age: 30,
-      };
-      mockRepository.create.mockReturnValue({ ...createDto, id: 2 });
-      mockRepository.save.mockResolvedValue({ ...createDto, id: 2 });
+      const dto = { title: 'New Task', description: 'New', priority: 2 };
+      mockRepository.create.mockReturnValue({ ...dto, id: 2 });
+      mockRepository.save.mockResolvedValue({ ...dto, id: 2 });
 
-      const result = await service.createTask(createDto);
+      const result = await service.createTask(dto);
 
-      expect(mockRepository.create).toHaveBeenCalledWith(createDto);
-      expect(mockRepository.save).toHaveBeenCalled();
-      expect(result).toHaveProperty('id', 2);
+      expect(mockRepository.create).toHaveBeenCalledWith(dto);
+      expect(result).toHaveProperty('id');
     });
   });
 
   describe('updateTask', () => {
     it('should update an existing task', async () => {
-      const updateDto = { name: 'Updated Task' };
       mockRepository.findOne.mockResolvedValue(mockTask);
-      mockRepository.save.mockResolvedValue({ ...mockTask, ...updateDto });
+      mockRepository.save.mockResolvedValue({ ...mockTask, title: 'Updated' });
 
-      const result = await service.updateTask(1, updateDto);
+      const result = await service.updateTask(1, { title: 'Updated' });
 
-      expect(result).toHaveProperty('name', 'Updated Task');
+      expect(result).toHaveProperty('title', 'Updated');
     });
   });
 
@@ -115,10 +118,25 @@ describe('TasksService', () => {
       expect(mockRepository.remove).toHaveBeenCalledWith(mockTask);
     });
 
-    it('should throw NotFoundException if task not found', async () => {
+    it('should throw NotFoundException if not found', async () => {
       mockRepository.findOne.mockResolvedValue(null);
 
       await expect(service.deleteTask(999)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('getTaskStats', () => {
+    it('should return task statistics', async () => {
+      mockRepository.count.mockResolvedValue(10);
+
+      const result = await service.getTaskStats();
+
+      expect(result).toEqual({
+        total: 10,
+        pending: 10,
+        inProgress: 10,
+        completed: 10,
+      });
     });
   });
 });

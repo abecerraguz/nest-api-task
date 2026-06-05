@@ -1,8 +1,9 @@
+import 'dotenv/config';
+
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import 'dotenv/config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -17,8 +18,8 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle('NestJS Task API')
-    .setDescription('API for managing tasks')
+    .setTitle('Task Manager API')
+    .setDescription('Administrador de tareas con NestJS')
     .setVersion('1.0')
     .addTag('tasks')
     .build();
@@ -30,8 +31,6 @@ async function bootstrap() {
 
   await app.listen(process.env.PORT ?? 3000);
   console.log(`Server running on http://localhost:${process.env.PORT ?? 3000}`);
-  console.log(
-    `Swagger docs at http://localhost:${process.env.PORT ?? 3000}/api`,
-  );
+  console.log(`Swagger docs at http://localhost:${process.env.PORT ?? 3000}/api`);
 }
 void bootstrap();
