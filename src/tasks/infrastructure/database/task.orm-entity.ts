@@ -5,37 +5,32 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
-
-export enum TaskStatus {
-  PENDING = 'pending',
-  IN_PROGRESS = 'in_progress',
-  COMPLETED = 'completed',
-}
+import { TaskStatus } from '../../domain/task-status.enum';
 
 @Entity()
-export class Task {
+export class TaskOrmEntity {
   @PrimaryGeneratedColumn()
-  id: number;
+  id!: number;
 
   @Column()
-  title: string;
+  title!: string;
 
   @Column({ type: 'text', nullable: true })
-  description: string;
+  description!: string | null;
 
   @Column({
     type: 'enum',
     enum: TaskStatus,
     default: TaskStatus.PENDING,
   })
-  status: TaskStatus;
+  status!: TaskStatus;
 
   @Column({ type: 'int', default: 0 })
-  priority: number;
+  priority!: number;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date;
+  updatedAt!: Date;
 }
