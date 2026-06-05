@@ -212,4 +212,3 @@ Al terminar esta guía, habrás construido:
 
 **¡Éxito en tu aprendizaje! 🚀**
 
-*Este proyecto fue construido siguiendo el curso de FaztWeb, mejorado con las mejores prácticas actuales de NestJS 11.*
