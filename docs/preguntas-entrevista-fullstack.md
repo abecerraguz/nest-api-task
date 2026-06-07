@@ -211,7 +211,7 @@ En la arquitectura hexagonal de `nest-api-task`, los casos de uso como `CreateTa
 
 ---
 
-### 🔴 Difícil — RBAC con Guards
+### 🔴 Difícil — RBAC (Control de Acceso Basado en Roles) con Guards (Un Guard en NestJS es un guardián que se ejecuta antes de que una request llegue al handler del controller)
 
 **¿Cómo implementarías autorización basada en roles (RBAC) en NestJS sin acoplar la lógica al controlador?**
 
