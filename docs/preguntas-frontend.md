@@ -360,40 +360,668 @@ function AdminPanel() {
 <details>
 <summary>Ver respuesta simple</summary>
 
-Hay varias estrategias según el tipo de estado:
+El estado global sirve para compartir datos entre múltiples componentes sin tener que pasarlos manualmente de padre a hijo (**prop drilling**). La herramienta correcta depende de qué tipo de dato es y con qué frecuencia cambia:
 
 ```
-╔══════════════════════════════════════════════════════════════╗
-║              TIPOS DE ESTADO GLOBAL                          ║
-╠══════════════════════════════════════════════════════════════╣
-║                                                              ║
-║  SESIÓN / AUTH ─── React Context                             ║
-║  "El usuario autenticado que toda la app necesita saber"     ║
-║  ┌──────────────────────────────────────────────────────┐    ║
-║  │ const AuthContext = createContext(null);             │    ║
-║  │                                                      │    ║
-║  │ // En el layout raíz (app/layout.tsx)                │    ║
-║  │ <AuthProvider>                                       │    ║
-║  │   {children}                                         │    ║
-║  │ </AuthProvider>                                      │    ║
-║  └──────────────────────────────────────────────────────┘    ║
-║                                                              ║
-║  DATOS DEL SERVIDOR ─── SWR / React Query                    ║
-║  "Listas, detalles que vienen de la API con cache"           ║
-║  ┌──────────────────────────────────────────────────────┐    ║
-║  │ // SWR tiene cache global por key automáticamente    │    ║
-║  │ const { data: tareas } = useSWR('/api/tareas');      │    ║
-║  │ // Cualquier componente que use esta key comparte    │    ║
-║  │ // los mismos datos en cache                         │    ║
-║  └──────────────────────────────────────────────────────┘    ║
-║                                                              ║
-║  ESTADO DE UI COMPLEJO ─── Zustand / Redux Toolkit           ║
-║  "Carrito de compras, wizard multi-paso, filtros globales"   ║
-║                                                              ║
-╚══════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════╗
+║          ¿POR QUÉ EXISTE EL ESTADO GLOBAL?                       ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  PROBLEMA — Prop Drilling                                        ║
+║                                                                  ║
+║  <App usuario={u}>                                               ║
+║    <Layout usuario={u}>           ← no lo usa                    ║
+║      <Sidebar usuario={u}>        ← no lo usa                    ║
+║        <Avatar usuario={u} />     ← al fin lo usa aquí          ║
+║                                                                  ║
+║  SOLUCIÓN — Estado global: Avatar consume el dato directamente   ║
+║  sin que Layout ni Sidebar lo conozcan                           ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
 ```
 
-> 💡 No uses Context para datos que cambian frecuentemente (listas de la API) — cada cambio re-renderiza todos los consumidores. Para eso SWR o React Query son la herramienta correcta.
+**Las 3 opciones principales:**
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  OPCIÓN           CUÁNDO USARLA              RENDIMIENTO         ║
+╠═══════════════════╦══════════════════════════╦═══════════════════╣
+║  React Context    ║  Datos estáticos o poco  ║  ⚠️  Re-renderiza  ║
+║  (nativo)         ║  cambiantes: sesión,     ║  a TODOS los      ║
+║                   ║  tema claro/oscuro       ║  consumidores     ║
+╠═══════════════════╬══════════════════════════╬═══════════════════╣
+║  Zustand          ║  Estado de UI dinámico:  ║  ✅ Solo actualiza ║
+║  (librería)       ║  carrito, filtros,       ║  el componente    ║
+║                   ║  modales, wizard         ║  que cambió       ║
+╠═══════════════════╬══════════════════════════╬═══════════════════╣
+║  Redux Toolkit    ║  Apps empresariales con  ║  ✅ Predecible,   ║
+║  (librería)       ║  lógica compleja y       ║  pero más         ║
+║                   ║  muchos devs en el equipo║  boilerplate      ║
+╚═══════════════════╩══════════════════════════╩═══════════════════╝
+```
+
+---
+
+**1. React Context — para datos que cambian poco**
+
+```tsx
+// Ideal: sesión del usuario, tema de la app
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [usuario, setUsuario] = useState(null);
+  return (
+    <AuthContext.Provider value={{ usuario, setUsuario }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+// En app/layout.tsx — envuelve toda la app una sola vez
+<AuthProvider>{children}</AuthProvider>
+
+// En cualquier componente profundo — sin prop drilling
+const { usuario } = useContext(AuthContext);
+```
+
+> ⚠️ **Limitación:** si el Context cambia frecuentemente (ej: una lista de tareas que se filtra), **todos** los componentes suscritos re-renderizan, aunque no usen el dato que cambió.
+
+---
+
+**2. Zustand — la favorita de la comunidad hoy**
+
+```tsx
+// store/tareas.store.ts
+import { create } from 'zustand';
+
+interface TareasStore {
+  filtro: string;
+  setFiltro: (filtro: string) => void;
+}
+
+export const useTareasStore = create<TareasStore>((set) => ({
+  filtro: '',
+  setFiltro: (filtro) => set({ filtro }),
+}));
+
+// Componente A — cambia el filtro
+function BarraBusqueda() {
+  const setFiltro = useTareasStore(s => s.setFiltro); // ← solo suscribe a setFiltro
+  return <input onChange={e => setFiltro(e.target.value)} />;
+}
+
+// Componente B — consume el filtro (solo este re-renderiza al cambiar)
+function ListaTareas() {
+  const filtro = useTareasStore(s => s.filtro); // ← solo suscribe a filtro
+  // ...
+}
+```
+
+> ✅ **Ventaja clave de Zustand:** al suscribirte solo al selector que necesitas (`s => s.filtro`), el componente **solo re-renderiza cuando ese dato específico cambia**.
+
+---
+
+**3. Redux Toolkit — el estándar empresarial**
+
+```tsx
+// features/tareas/tareas.slice.ts
+import { createSlice } from '@reduxjs/toolkit';
+
+const tareasSlice = createSlice({
+  name: 'tareas',
+  initialState: { items: [], isLoading: false },
+  reducers: {
+    agregarTarea: (state, action) => {
+      state.items.push(action.payload); // Immer lo hace inmutable por dentro
+    },
+    setLoading: (state, action) => {
+      state.isLoading = action.payload;
+    },
+  },
+});
+
+export const { agregarTarea, setLoading } = tareasSlice.actions;
+
+// Uso en componente
+const dispatch = useDispatch();
+dispatch(agregarTarea({ id: 1, titulo: 'Nueva tarea' }));
+```
+
+> 💡 Redux brilla en equipos grandes: el historial de acciones en **Redux DevTools** permite ver exactamente qué cambio de estado causó cada bug, como un "time-travel debugging".
+
+---
+
+**Resumen de decisión rápida:**
+
+```
+¿Datos de sesión / preferencias?  → React Context
+¿Estado de UI interactivo?         → Zustand
+¿App grande, equipo numeroso?      → Redux Toolkit
+¿Datos que vienen de la API?       → SWR / React Query (no estado global)
+```
+
+</details>
+
+---
+
+### 🟡 Media — Reglas de los hooks
+
+**¿Cuáles son las reglas de los hooks en React?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+Los hooks tienen dos reglas fundamentales que React necesita para funcionar correctamente:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                   REGLAS DE LOS HOOKS                            ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  REGLA 1 — Solo en componentes funcionales o custom hooks        ║
+║  No se pueden usar en clases, funciones normales o callbacks     ║
+║                                                                  ║
+║  REGLA 2 — Siempre en el nivel superior del componente           ║
+║  NUNCA dentro de: if, for, while, funciones anidadas             ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**¿Por qué existe la regla 2?** React identifica cada hook por su **orden de ejecución**. Si ese orden cambia entre renders, React mezcla estados y genera bugs.
+
+```tsx
+// ❌ INCORRECTO — hook dentro de un condicional
+function Componente({ isOpen }) {
+  if (isOpen) {
+    useEffect(() => { console.log('abierto'); }, []); // 💥 el orden puede cambiar
+  }
+  return <div>Hola</div>;
+}
+
+// ✅ CORRECTO — la condición va DENTRO del hook
+function Componente({ isOpen }) {
+  useEffect(() => {
+    if (isOpen) { console.log('abierto'); }
+  }, [isOpen]);
+  return <div>Hola</div>;
+}
+```
+
+```tsx
+// ❌ INCORRECTO — hook después de un return temprano
+function Componente({ activo }) {
+  if (!activo) return null;               // a veces sale aquí...
+  const [count, setCount] = useState(0); // 💥 a veces no llega aquí
+  return <div>{count}</div>;
+}
+
+// ✅ CORRECTO — todos los hooks antes de cualquier return
+function Componente({ activo }) {
+  const [count, setCount] = useState(0); // ✅ siempre se ejecuta
+  if (!activo) return null;
+  return <div>{count}</div>;
+}
+```
+
+> 💡 Usa `eslint-plugin-react-hooks` en tu proyecto — detecta automáticamente violaciones de estas reglas antes de que lleguen a producción.
+
+</details>
+
+---
+
+### 🟡 Media — Cuántos `useEffect` puede tener un componente
+
+**¿Cuántos `useEffect` puede tener un componente?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+**Tantos como necesite.** No hay límite. Y de hecho, lo recomendable es tener **varios `useEffect` pequeños y enfocados** en lugar de uno grande con todo:
+
+```tsx
+// ❌ Un solo useEffect con múltiples responsabilidades — difícil de mantener
+useEffect(() => {
+  fetchUsuario(userId).then(setUsuario);           // Responsabilidad 1
+  window.addEventListener('resize', handleResize); // Responsabilidad 2
+  localStorage.setItem('tema', tema);              // Responsabilidad 3
+  return () => window.removeEventListener('resize', handleResize);
+}, [userId, tema]); // ← mezcla dependencias de 3 efectos distintos
+
+// ✅ Tres useEffect separados — cada uno con su responsabilidad
+useEffect(() => {
+  fetchUsuario(userId).then(setUsuario);
+}, [userId]); // solo cuando cambia userId
+
+useEffect(() => {
+  window.addEventListener('resize', handleResize);
+  return () => window.removeEventListener('resize', handleResize);
+}, []); // solo al montar/desmontar
+
+useEffect(() => {
+  localStorage.setItem('tema', tema);
+}, [tema]); // solo cuando cambia el tema
+```
+
+> 💡 Si ves un `useEffect` con muchas dependencias mezcladas, es señal de que debería dividirse.
+
+</details>
+
+---
+
+### 🟡 Media — `useEffect` vs `useLayoutEffect`
+
+**¿Diferencia entre `useEffect` y `useLayoutEffect`?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+La diferencia está en **cuándo** se ejecutan respecto al pintado del browser:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║              CICLO DE RENDER CON EFECTOS                         ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  1. React aplica cambios al DOM real                             ║
+║        │                                                         ║
+║        ├──► useLayoutEffect  ← SÍNCRONO, antes de pintar        ║
+║        │    (bloquea el repintado hasta terminar)                ║
+║        │                                                         ║
+║        ▼                                                         ║
+║  2. El browser PINTA en pantalla (el usuario ve los cambios)     ║
+║        │                                                         ║
+║        └──► useEffect  ← ASÍNCRONO, después de pintar           ║
+║             (no bloquea, se ejecuta en background)               ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+```tsx
+// ✅ useEffect — 99% de los casos
+useEffect(() => {
+  fetchTareas().then(setTareas);
+}, []);
+
+// ✅ useLayoutEffect — cuando necesitas medir el DOM ANTES de que el usuario lo vea
+useLayoutEffect(() => {
+  const altura = ref.current.getBoundingClientRect().height;
+  setPosicionTooltip(altura); // Con useEffect habría un parpadeo visible
+}, []);
+```
+
+| | `useEffect` | `useLayoutEffect` |
+|---|---|---|
+| Cuándo se ejecuta | Después de pintar | Antes de pintar |
+| Bloquea el render | No | Sí |
+| Rendimiento | Mejor | Puede causar lag |
+| Cuándo usar | Casi siempre | Solo para medir/posicionar DOM |
+
+> 💡 Usa `useLayoutEffect` **solo** si hay un parpadeo visual con `useEffect`. En SSR genera un warning — usa `useEffect` con un estado de "montado" como alternativa.
+
+</details>
+
+---
+
+### 🟡 Media — Componentes controlados vs no controlados
+
+**¿Diferencia entre componentes controlados y no controlados?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+La diferencia está en **quién controla el valor** de un input de formulario:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║  CONTROLADO → React es la fuente de verdad                       ║
+║  El estado de React controla lo que muestra el input             ║
+║                                                                  ║
+║  NO CONTROLADO → el DOM es la fuente de verdad                   ║
+║  El DOM guarda el valor, lo leemos con ref cuando lo necesitamos ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+```tsx
+// ✅ CONTROLADO — el input siempre muestra lo que dice el estado
+function FormControlado() {
+  const [email, setEmail] = useState('');
+  return (
+    <input
+      value={email}                            // ← React controla el valor
+      onChange={e => setEmail(e.target.value)} // ← actualiza el estado en cada tecla
+    />
+  );
+  // Re-renderiza en cada keystroke → permite validación en tiempo real
+}
+
+// ✅ NO CONTROLADO — leemos el valor del DOM solo cuando lo necesitamos
+function FormNoControlado() {
+  const emailRef = useRef<HTMLInputElement>(null);
+  const handleSubmit = () => console.log(emailRef.current?.value);
+  return (
+    <input
+      ref={emailRef}
+      defaultValue=""  // ← valor inicial, no "value" controlado
+    />
+  );
+  // No re-renderiza en cada keystroke → más performante para forms simples
+}
+```
+
+| | Controlado | No controlado |
+|---|---|---|
+| Fuente de verdad | Estado de React | DOM |
+| Validación en tiempo real | ✅ Fácil | ❌ Difícil |
+| Re-renders | Uno por keystroke | Solo al enviar |
+| Cuándo usar | Forms con lógica compleja | Forms simples, `react-hook-form` |
+
+> 💡 **`react-hook-form`** usa componentes no controlados internamente — por eso es tan rápido. Solo re-renderiza al validar o enviar, no en cada keystroke.
+
+</details>
+
+---
+
+### 🟡 Media — `useCallback` vs `useMemo`: diferencia real
+
+**¿Cuál es la diferencia real entre `useCallback` y `useMemo`?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+Ambos "memorizan", pero lo que guardan es distinto:
+
+```
+useMemo     → memoriza el RESULTADO de ejecutar una función (un valor)
+useCallback → memoriza la REFERENCIA de una función (sin ejecutarla)
+```
+
+```tsx
+// useMemo — ejecuta la función y guarda el RESULTADO
+const tareasFiltradas = useMemo(() =>
+  tareas.filter(t => t.status === filtro),
+  [tareas, filtro]
+);
+// tareasFiltradas es un array []
+
+// useCallback — guarda la FUNCIÓN sin ejecutarla
+const handleEliminar = useCallback((id: number) => {
+  eliminarTarea(id);
+}, []);
+// handleEliminar es una función () => {}
+```
+
+**Son equivalentes internamente:**
+
+```tsx
+// Estos dos hacen exactamente lo mismo:
+const fn = useCallback(() => hacerAlgo(a, b), [a, b]);
+
+const fn = useMemo(() => () => hacerAlgo(a, b), [a, b]);
+//                  ↑ función que devuelve otra función
+```
+
+**¿Por qué importa la referencia estable de una función?**
+
+```tsx
+// Sin useCallback → función nueva en cada render → Hijo re-renderiza siempre
+function Padre() {
+  const handleClick = () => console.log('click'); // nueva ref cada render
+  return <Hijo onClick={handleClick} />;
+}
+
+// Con useCallback → misma referencia → Hijo NO re-renderiza
+function Padre() {
+  const handleClick = useCallback(() => console.log('click'), []);
+  return <Hijo onClick={handleClick} />;
+}
+
+// IMPORTANTE: solo tiene efecto si Hijo está memoizado con React.memo
+const Hijo = React.memo(({ onClick }) => <button onClick={onClick}>Click</button>);
+```
+
+> 💡 No los uses en exceso. Solo aportan valor junto a `React.memo`. Sin memoización en el hijo son optimización prematura con coste de memoria y complejidad.
+
+</details>
+
+---
+
+### 🟡 Media — Error Boundaries
+
+**¿Qué son los Error Boundaries?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+Son componentes que **capturan errores** en el árbol de hijos y muestran una UI de fallback en lugar de romper toda la app:
+
+```
+SIN Error Boundary:
+  Error en <TablaTareas /> → 💥 pantalla blanca, toda la app se rompe
+
+CON Error Boundary:
+  Error en <TablaTareas /> → muestra "Algo salió mal" solo en esa sección
+  El Header y el resto de la app siguen funcionando ✅
+```
+
+```tsx
+// Debe ser clase — los hooks no pueden capturar errores de render
+class ErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, info) {
+    logError(error, info.componentStack); // enviar a Sentry, Datadog, etc.
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <p>
+          Algo salió mal.{' '}
+          <button onClick={() => this.setState({ hasError: false })}>
+            Reintentar
+          </button>
+        </p>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Uso — granularidad por sección
+export default function Dashboard() {
+  return (
+    <div>
+      <Header />
+      <ErrorBoundary>
+        <TablaTareas />   {/* Fallo aislado */}
+      </ErrorBoundary>
+      <ErrorBoundary>
+        <Estadisticas />  {/* Fallo independiente */}
+      </ErrorBoundary>
+    </div>
+  );
+}
+```
+
+> ⚠️ Los Error Boundaries **NO capturan:** errores en event handlers (usa `try/catch`), errores asíncronos (`fetch`, `setTimeout`), ni errores del propio Error Boundary.
+
+> 💡 Usa [`react-error-boundary`](https://github.com/bvaughn/react-error-boundary) para evitar escribir la clase manualmente — da una API funcional con hooks y soporte para `reset`.
+
+</details>
+
+---
+
+### 🟡 Media — StrictMode
+
+**¿Qué es `StrictMode` y por qué renderiza dos veces en desarrollo?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+`StrictMode` es una herramienta **solo para desarrollo** que activa comprobaciones extra para detectar problemas antes de producción:
+
+```tsx
+root.render(
+  <StrictMode>
+    <App />
+  </StrictMode>
+);
+```
+
+**¿Por qué renderiza dos veces?** Es intencional. React invoca los componentes dos veces para exponer side effects en el render que no deberían estar ahí:
+
+```tsx
+// ❌ Código que StrictMode detecta: side effect en el render
+let contadorGlobal = 0;
+function Componente() {
+  contadorGlobal++; // 💥 el render modifica estado externo
+  return <div>Renders: {contadorGlobal}</div>;
+  // Con StrictMode verás el contador subir de 2 en 2 → señal del problema
+}
+
+// ✅ El render debe ser PURO: misma entrada = misma salida
+function Componente({ titulo }) {
+  return <div>{titulo}</div>;
+}
+```
+
+**Qué detecta StrictMode:**
+
+```
+✅ Efectos con limpieza incompleta
+✅ Lógica no idempotente (se rompe si se ejecuta 2 veces)
+✅ Side effects dentro del render
+✅ Uso de APIs obsoletas de React
+```
+
+> 💡 El doble render **solo ocurre en desarrollo, nunca en producción**. Si tu componente falla con StrictMode, hay un bug real — corrígelo, no desactives StrictMode.
+
+</details>
+
+---
+
+### 🔴 Difícil — Cancelar `fetch` con `AbortController`
+
+**¿Cómo cancelas correctamente una petición en `useEffect`?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+**El problema:** el componente se desmonta antes de que termine el fetch, y React intenta actualizar el estado de algo que ya no existe → memory leak / warning.
+
+```tsx
+useEffect(() => {
+  // 1. Crear el controlador
+  const controller = new AbortController();
+
+  // 2. Vincular la señal al fetch
+  fetch('/api/tareas', { signal: controller.signal })
+    .then(r => r.json())
+    .then(data => setTareas(data))
+    .catch(error => {
+      if (error.name === 'AbortError') return; // cancelación intencional — ignorar
+      setError(error);                         // error real de red o servidor
+    });
+
+  // 3. Cancelar al desmontar (o cuando cambien las dependencias)
+  return () => controller.abort();
+}, []);
+```
+
+**Con `async/await`:**
+
+```tsx
+useEffect(() => {
+  const controller = new AbortController();
+
+  async function cargar() {
+    try {
+      const res = await fetch('/api/tareas', { signal: controller.signal });
+      const data = await res.json();
+      setTareas(data);
+    } catch (error) {
+      if (error.name !== 'AbortError') setError(error);
+    }
+  }
+
+  cargar();
+  return () => controller.abort();
+}, []);
+```
+
+> 💡 Si usas **SWR o React Query**, esto está resuelto automáticamente. Es otra razón para preferirlos sobre el patrón manual con `useEffect`.
+
+</details>
+
+---
+
+### 🔴 Difícil — `useTransition`
+
+**¿Para qué sirve `useTransition` y cuándo usarlo?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+`useTransition` (React 18) marca actualizaciones como **"no urgentes"** para que React priorice mantener la UI fluida:
+
+```
+SIN useTransition:
+  Escribes en el input → React actualiza input + filtra 5000 items
+  → UI se congela hasta terminar 😞
+
+CON useTransition:
+  Escribes en el input → input se actualiza INMEDIATAMENTE
+  → El filtrado ocurre en background sin bloquear la UI ✅
+```
+
+```tsx
+import { useState, useTransition } from 'react';
+
+function BuscadorTareas({ tareas }) {
+  const [query, setQuery] = useState('');
+  const [resultado, setResultado] = useState(tareas);
+  const [isPending, startTransition] = useTransition();
+  //     ↑ true mientras la transición está calculando
+
+  const handleChange = (e) => {
+    const valor = e.target.value;
+
+    setQuery(valor); // ← URGENTE: actualiza el input de inmediato
+
+    startTransition(() => {
+      // NO URGENTE: React puede interrumpir esto si llega algo más urgente
+      setResultado(tareas.filter(t =>
+        t.titulo.toLowerCase().includes(valor.toLowerCase())
+      ));
+    });
+  };
+
+  return (
+    <>
+      <input value={query} onChange={handleChange} />
+      {isPending && <span>Filtrando...</span>}
+      <ul>{resultado.map(t => <li key={t.id}>{t.titulo}</li>)}</ul>
+    </>
+  );
+}
+```
+
+**¿Cuándo usarlo?**
+
+```
+✅ Filtrar / ordenar listas grandes en el cliente
+✅ Cambiar de pestaña en una UI con renders costosos
+❌ Inputs, clicks, scroll — deben ser siempre urgentes
+❌ Peticiones de red — usa SWR/React Query
+```
+
+> 💡 Antes de React 18, la solución era `debounce` con `setTimeout`. `useTransition` es más elegante: React gestiona la prioridad automáticamente y puede interrumpir la transición si llega algo más urgente.
 
 </details>
 
@@ -410,41 +1038,71 @@ Hay varias estrategias según el tipo de estado:
 <details>
 <summary>Ver respuesta simple</summary>
 
-El Pages Router es la versión "clásica" de Next.js. El App Router (Next.js 13+) es la forma moderna:
+Ambos son sistemas de enrutamiento de Next.js, pero difieren en arquitectura y capacidades. El **Pages Router** es el sistema tradicional (basado en archivos dentro de `pages/`), mientras que el **App Router** es el enfoque moderno (basado en carpetas dentro de `app/`) que usa React Server Components por defecto y soporta layouts anidados nativos.
 
 ```
 ╔══════════════════════════════════════════════════════════════════════╗
 ║              PAGES ROUTER vs APP ROUTER                              ║
 ╠════════════════════════╦═════════════════════════════════════════════╣
-║  Pages Router          ║  App Router (moderno)                       ║
+║  Pages Router          ║  App Router (Next.js 13+)                   ║
 ╠════════════════════════╬═════════════════════════════════════════════╣
+║  Basado en archivos    ║  Basado en carpetas                         ║
 ║  pages/tareas/[id].tsx ║  app/tareas/[id]/page.tsx                   ║
-║  getServerSideProps()  ║  async function Page() { await fetch... }   ║
+╠════════════════════════╬═════════════════════════════════════════════╣
+║  getServerSideProps()  ║  async component + await fetch directo      ║
 ║  getStaticProps()      ║  generateStaticParams()                     ║
 ║  pages/api/tareas.ts   ║  app/api/tareas/route.ts                    ║
-║  _app.tsx para layout  ║  layout.tsx anidados nativos                ║
-║  Solo Client por defecto║  Server Components por defecto             ║
+╠════════════════════════╬═════════════════════════════════════════════╣
+║  Layout global en      ║  layout.tsx anidados por ruta               ║
+║  _app.tsx (uno solo)   ║  (cada segmento puede tener el suyo)        ║
+╠════════════════════════╬═════════════════════════════════════════════╣
+║  Client Components     ║  Server Components por defecto              ║
+║  por defecto           ║  'use client' solo donde se necesite        ║
+╠════════════════════════╬═════════════════════════════════════════════╣
+║  Sin loading nativo    ║  loading.tsx = Suspense automático          ║
 ╚════════════════════════╩═════════════════════════════════════════════╝
 ```
 
-**Ejemplo comparativo — misma pantalla de detalle:**
+**¿Qué cambia en la práctica?**
 
 ```tsx
-// Pages Router
+// ─── PAGES ROUTER ───────────────────────────────────────────
+// El fetch de datos NO vive en el componente, sino en una función aparte
 export async function getServerSideProps({ params }) {
   const tarea = await obtenerTarea(params.id);
-  return { props: { tarea } };
+  return { props: { tarea } }; // Se inyecta como prop
 }
-export default function DetalleTarea({ tarea }) { ... }
+export default function DetalleTarea({ tarea }) {
+  return <div>{tarea.titulo}</div>;
+}
 
-// App Router (más limpio, mismo resultado)
+// ─── APP ROUTER ─────────────────────────────────────────────
+// El componente ES async — el fetch vive junto a la UI
 export default async function DetalleTarea({ params }) {
-  const tarea = await obtenerTarea(params.id); // Directo, sin wrapper
+  const tarea = await obtenerTarea(params.id); // Sin wrapper, más limpio
   return <div>{tarea.titulo}</div>;
 }
 ```
 
-> 💡 **Ventaja clave del App Router:** menos JavaScript en el cliente, layouts anidados sin prop drilling, y el fetch vive junto al componente que lo necesita.
+**Layouts anidados — la gran diferencia:**
+
+```
+Pages Router — un solo _app.tsx para toda la app
+app/
+└── _app.tsx  ← layout único global
+
+App Router — cada segmento de ruta puede tener su propio layout
+app/
+├── layout.tsx              ← layout raíz (header, footer)
+├── dashboard/
+│   ├── layout.tsx          ← layout solo para /dashboard (sidebar)
+│   └── page.tsx
+└── auth/
+    ├── layout.tsx          ← layout solo para /auth (centrado, sin sidebar)
+    └── login/page.tsx
+```
+
+> 💡 **Ventaja clave del App Router:** menos JavaScript enviado al cliente (Server Components = 0 JS), layouts anidados sin prop drilling, estados de carga nativos con `loading.tsx`, y el fetch vive junto al componente que lo necesita.
 
 </details>
 
@@ -1373,6 +2031,149 @@ function ListaGrande({ items }) {
 ```
 
 > 💡 En una entrevista, siempre menciona primero la paginación en servidor. La virtualización es el último recurso cuando los datos *deben* estar en cliente.
+
+</details>
+
+---
+
+### 🔴 Difícil — Vulnerabilidades en paquetes NPM
+
+**¿Cuál sería la solución técnica para no estar afecto a vulnerabilidades en paquetes NPM?**
+
+<details>
+<summary>Ver respuesta simple</summary>
+
+Los paquetes de NPM son código de terceros que ejecutas en tu proyecto. Una dependencia comprometida o desactualizada puede introducir vulnerabilidades de seguridad sin que lo notes. La defensa se organiza en tres capas:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║              CAPAS DE DEFENSA CONTRA VULNERABILIDADES NPM        ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  CAPA 1 — Detección (saber qué tienes)                           ║
+║  CAPA 2 — Prevención (no dejar entrar lo malo)                   ║
+║  CAPA 3 — Automatización (que el CI/CD te proteja)               ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+**CAPA 1 — Detección: auditar lo que ya tienes**
+
+```bash
+# Escanea todas las dependencias contra la base de datos de vulnerabilidades de NPM
+npm audit
+
+# Si encuentra vulnerabilidades, intenta corregirlas automáticamente
+npm audit fix
+
+# Para vulnerabilidades que requieren cambios de versión mayor (breaking changes)
+npm audit fix --force   # ⚠️ Revisar manualmente después
+```
+
+```
+Salida típica de npm audit:
+┌─────────────────────────────────────────────────────┐
+│ high   │ Prototype Pollution in lodash               │
+│ Path   │ tu-app > alguna-lib > lodash                │
+│ Fix    │ Update lodash to 4.17.21                    │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+**CAPA 2 — Prevención: buenas prácticas en el día a día**
+
+```bash
+# 1. Bloquear versiones exactas con lockfile (nunca ignorar en git)
+# package-lock.json / pnpm-lock.yaml → siempre commitearlo
+# Garantiza que todos instalen exactamente las mismas versiones
+
+# 2. Preferir versiones estables y con mantenimiento activo
+# ✅ "lodash": "4.17.21"     ← versión exacta
+# ⚠️ "lodash": "^4.0.0"     ← acepta cualquier minor (más riesgo)
+# ❌ "lodash": "*"           ← acepta cualquier versión (nunca hacer esto)
+
+# 3. Revisar un paquete ANTES de instalarlo
+npx npm-check-updates        # ve qué dependencias tienen updates disponibles
+```
+
+```typescript
+// 4. Principio de mínima dependencia
+// Antes de instalar una librería, pregúntate:
+// - ¿Puedo hacerlo con 10 líneas de código propio?
+// - ¿Cuándo fue el último commit del repo?
+// - ¿Cuántas dependencias transitivas trae?
+
+// ❌ Instalar una librería de 50KB solo para formatear una fecha
+import { formatDate } from 'super-date-lib';
+
+// ✅ Usar la API nativa del browser / Node
+new Intl.DateTimeFormat('es-CL').format(new Date());
+```
+
+---
+
+**CAPA 3 — Automatización: que el CI/CD te avise antes de llegar a producción**
+
+```yaml
+# GitHub Actions — .github/workflows/security.yml
+name: Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 9 * * 1'  # Cada lunes a las 9am (auditoría semanal automática)
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci           # Instala con lockfile estricto
+      - run: npm audit --audit-level=high  # Falla el build si hay vulnerabilidades HIGH o CRITICAL
+```
+
+```
+Con --audit-level=high:
+  low / moderate  → el build continúa (avisa pero no bloquea)
+  high / critical → el build FALLA ← no llega a producción ✅
+```
+
+---
+
+**Herramientas adicionales del ecosistema:**
+
+```
+┌────────────────────┬──────────────────────────────────────────────┐
+│  Herramienta       │  Qué hace                                    │
+├────────────────────┼──────────────────────────────────────────────┤
+│  Dependabot        │  PR automáticos de GitHub cuando hay updates │
+│  (GitHub nativo)   │  de seguridad en tus dependencias            │
+├────────────────────┼──────────────────────────────────────────────┤
+│  Snyk              │  Escaneo más profundo, incluye              │
+│                    │  dependencias transitivas y Docker images    │
+├────────────────────┼──────────────────────────────────────────────┤
+│  Socket.dev        │  Detecta paquetes maliciosos ANTES de        │
+│                    │  instalarlos (supply chain attacks)          │
+└────────────────────┴──────────────────────────────────────────────┘
+```
+
+**Resumen de acción concreta:**
+
+```
+1. npm audit          → revisar estado actual del proyecto
+2. Lockfile en git    → versiones exactas garantizadas en todos los entornos
+3. npm audit en CI    → ninguna vulnerabilidad HIGH llega a producción
+4. Dependabot         → actualizaciones automáticas sin esfuerzo manual
+```
+
+> 💡 **El riesgo más subestimado:** las **dependencias transitivas** — no es tu código ni una librería que tú instalaste directamente, sino una dependencia de una dependencia. Por eso `npm audit` escanea todo el árbol, no solo tu `package.json`.
 
 </details>
 
